@@ -1,1 +1,6 @@
 *~
+bin/
+dist/
+bin-dev/
+fat-test/
+fat-test2/
