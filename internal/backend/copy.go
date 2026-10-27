@@ -58,7 +58,9 @@ func newCopyBackend(ctx context.Context, o Options, remote string) (Backend, err
 	if opts, ok := gitutil.ConfigGet(ctx, "rsync.options", o.GitFatFile); ok && opts != "" {
 		o.Logf("rsync.options is ignored (%q)", opts)
 	}
-	jobs := o.jobs(ctx, "rsync.jobs", defaultCopyJobs)
+	jobSetting := ResolveJobs(o.Jobs, "rsync", SystemLookup(ctx, o.GitFatFile), warnf)
+	o.Logf("jobs: %s", jobSetting)
+	jobs := jobSetting.Value
 
 	userHost, dir, remoteHost := splitRemote(remote)
 	if !remoteHost {

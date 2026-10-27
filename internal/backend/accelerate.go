@@ -101,11 +101,14 @@ func S3Info(ctx context.Context, o Options) ([]string, error) {
 	case status == "":
 		status = "not configured"
 	}
+	jobs, part := b.jobsSetting, b.partSetting
 	lines := []string{
 		fmt.Sprintf("bucket:     %s", b.bucket),
 		fmt.Sprintf("profile:    %s (%s)", orDefault(p.Value), p.Source),
 		fmt.Sprintf("region:     %s (%s)", orDefault(r.Value), r.Source),
 		fmt.Sprintf("accelerate: %s (%s)", req.Value, req.Source),
+		fmt.Sprintf("jobs:       %s", jobs),
+		fmt.Sprintf("partsize:   %s MB (minimum 5)", part),
 		fmt.Sprintf("bucket acceleration status: %s", status),
 	}
 	if reason := accelerateRefusal(b.endpoint, b.pathStyle, b.bucket); reason != "" {

@@ -8,11 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync/atomic"
 
 	"github.com/WardsParadox/git-fat/internal/fat"
-	"github.com/WardsParadox/git-fat/internal/gitutil"
 	"github.com/WardsParadox/git-fat/internal/progress"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -29,23 +27,6 @@ const (
 	partAttempts    = 3
 	hashChunk       = 1 * mib
 )
-
-// s3PartSizeFromConfig reads GIT_FAT_S3_PART_MB, then s3.partsize (in MB).
-func s3PartSizeFromConfig(ctx context.Context, o Options) int64 {
-	v := os.Getenv("GIT_FAT_S3_PART_MB")
-	if v == "" {
-		v, _ = gitutil.ConfigGet(ctx, "s3.partsize", o.GitFatFile)
-	}
-	if v == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		warnf("ignoring invalid S3 part size %q (want a number of MB)", v)
-		return 0
-	}
-	return max(int64(n)*mib, minPartSize)
-}
 
 // ensure sets defaults for fields a test or caller left zero.
 func (b *s3Backend) ensure() {

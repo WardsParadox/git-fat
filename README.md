@@ -49,7 +49,6 @@ git-fat speaks SFTP itself, so no `rsync` or `ssh` binary is needed.
     remote = your.remote-host.org:/share/fat-store
     sshuser = fat
     sshport = 2222
-    jobs = 8
 
 * `remote` is `[user@]host:/path`. A remote without a host (`/mnt/nfs/fat-store`)
   is treated as a local directory, and so is a `localhost:` remote.
@@ -65,7 +64,7 @@ git-fat speaks SFTP itself, so no `rsync` or `ssh` binary is needed.
   if both are set, `ProxyJump` wins.
 * Each SSH connection carries at most 8 SFTP sessions, so a large `jobs` value
   opens extra connections, through the same proxy.
-* `jobs` sets the number of parallel SFTP sessions (default 8).
+* `jobs` (see the configuration reference) sets the number of parallel SFTP sessions.
 * If some objects are missing on the remote, `git fat pull` still downloads and restores the rest, then lists the missing ones and exits non-zero.
 * Objects that already exist on the remote are never overwritten. Uploads go to
   `<name>.tmp` and are renamed when complete.
@@ -77,17 +76,10 @@ git-fat speaks SFTP itself, so no `rsync` or `ssh` binary is needed.
     bucket = s3://your-s3-bucket
 
 Credentials come from the standard AWS chain (environment, shared config, SSO,
-instance roles). Optional keys:
-
-| Key | Meaning |
-| --- | --- |
-| `s3.profile` | Shared default AWS profile for the repository |
-| `s3.region` | Region (otherwise the SDK default, or the bucket's region) |
-| `s3.endpoint` | Custom endpoint, e.g. MinIO or Cloudflare R2 |
-| `s3.pathstyle` | `true` to use path-style addressing (MinIO) |
-| `s3.prefix` | Key prefix inside the bucket |
-| `s3.jobs` | Parallel transfers (default `min(16, 4*CPUs)`) |
-| `s3.partsize` | Multipart part size in MB (default 8, minimum 5; also `GIT_FAT_S3_PART_MB`). Raised automatically for very large objects |
+instance roles). Optional keys under `[s3]` are `profile`, `region`, `endpoint`
+(MinIO, Cloudflare R2), `pathstyle` (`true` for path-style addressing), `prefix`
+(key prefix inside the bucket), `jobs`, `partsize` and `accelerate`; see the
+configuration reference below.
 
 Objects are listed once, then uploaded and downloaded with multipart transfers.
 A shared budget of about 4 part requests per job (at least 16) is split across
@@ -96,21 +88,17 @@ files are transferred side by side. Downloads are hashed as they arrive and
 verified against their SHA-1 before being stored.
 
 ### Choosing an AWS profile
-The profile is resolved in this order, highest first:
+`git fat profile` shows each resolved setting and where it came from, and
+`git fat profile set <name>` writes `fat.profile` to `.git/config`:
 
-1. `--profile <name>` on `push`, `pull`, `status` or `profile`
-2. the `GIT_FAT_PROFILE` environment variable
-3. `git config fat.profile` (per user, not committed)
-4. `s3.profile` in `.gitfat` (shared repository default)
-5. `AWS_PROFILE` or the SDK default chain
-
-The region follows the same order with `--region`, `GIT_FAT_REGION`,
-`fat.region` and `s3.region`.
-
-    $ git fat profile                 # show the resolved profile and where it came from
+    $ git fat profile
     profile: work (git config fat.profile)
     region:  us-west-2 (.gitfat s3.region)
-    $ git fat profile set work        # write fat.profile to .git/config
+    accelerate: false (default)
+    jobs:       16 (default)
+    partsize:   8 (default) MB
+
+The AWS profile additionally falls back to `AWS_PROFILE` and the SDK default chain.
 
 ### Transfer Acceleration
 [S3 Transfer Acceleration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html)
@@ -124,10 +112,9 @@ Enable it on the bucket first (the bucket name must not contain dots):
     aws s3api put-bucket-accelerate-configuration \
         --bucket your-s3-bucket --accelerate-configuration Status=Enabled
 
-Then request it, with the same precedence as the profile (highest first):
-`--accelerate` / `--no-accelerate` on `push` and `pull`, `GIT_FAT_ACCELERATE`,
-`git config fat.accelerate`, then `accelerate = true` under `[s3]` in `.gitfat`.
-Values follow git booleans (`true`, `yes`, `on`, `1` and their opposites).
+Then request it with `--accelerate`, `GIT_FAT_ACCELERATE=true`,
+`git config fat.accelerate true` or `accelerate = true` under `[s3]`. Values
+follow git booleans (`true`, `yes`, `on`, `1` and their opposites).
 
 When requested, git-fat checks the bucket's acceleration status once per run
 (this needs `s3:GetAccelerateConfiguration`). If the status is not `Enabled`, the
@@ -137,9 +124,27 @@ fails a push or pull because of acceleration. Listing always uses the standard
 endpoint. `git fat s3-info` shows the resolved setting and the bucket's status,
 and `GIT_FAT_VERBOSE=1` logs whether acceleration is in use.
 
-### Parallelism
-`git fat push` and `git fat pull` accept `-j N` / `--jobs N` to set the number
-of concurrent transfers for any remote.
+## Configuration reference
+Every setting resolves in the same order, highest first: the command-line flag,
+the `GIT_FAT_*` environment variable, `git config fat.*` (per user, not
+committed), then the key in `.gitfat` (shared repository default). Keys placed
+in `.git/config` under their `.gitfat` names (for example `s3.jobs`) also work.
+A value that is invalid (for example a non-numeric `jobs`) prints one warning
+and is skipped in favour of the next source. `git fat profile` and
+`git fat s3-info` show what each setting resolved to and why.
+
+| Setting | Flag | Environment | `git config` | `.gitfat` | Default |
+| --- | --- | --- | --- | --- | --- |
+| AWS profile | `--profile` | `GIT_FAT_PROFILE` | `fat.profile` | `s3.profile` | `AWS_PROFILE`, then SDK chain |
+| AWS region | `--region` | `GIT_FAT_REGION` | `fat.region` | `s3.region` | SDK default or bucket region |
+| Transfer acceleration | `--accelerate`, `--no-accelerate` | `GIT_FAT_ACCELERATE` | `fat.accelerate` | `s3.accelerate` | off |
+| Parallel transfers | `-j`, `--jobs` | `GIT_FAT_JOBS` | `fat.jobs` | `s3.jobs` or `rsync.jobs` | S3: `min(16, 4*CPUs)`; SSH and local: 8 |
+| Multipart part size (MB) | `--part-size` | `GIT_FAT_PART_MB` (`GIT_FAT_S3_PART_MB` is a deprecated alias) | `fat.partsize` | `s3.partsize` | 8 (minimum 5) |
+
+The part size is raised automatically for objects that would otherwise need more
+than 9000 parts. These keys are read from `.gitfat` only: `s3.bucket`,
+`s3.endpoint`, `s3.pathstyle`, `s3.prefix`, `rsync.remote`, `rsync.sshuser`,
+`rsync.sshport`.
 
 # A worked example
 

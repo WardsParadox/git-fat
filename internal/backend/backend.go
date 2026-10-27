@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/WardsParadox/git-fat/internal/gitutil"
@@ -26,7 +24,8 @@ type Options struct {
 	Profile    string // --profile
 	Region     string // --region
 	Accelerate string // --accelerate / --no-accelerate: "true", "false" or ""
-	Jobs       int    // -j/--jobs; 0 means use config or the backend default
+	Jobs       int    // -j/--jobs; 0 means unset
+	PartSizeMB int    // --part-size; 0 means unset
 	Logf       func(format string, args ...any)
 }
 
@@ -43,22 +42,6 @@ func New(ctx context.Context, o Options) (Backend, error) {
 		return nil, fmt.Errorf("no s3.bucket or rsync.remote in %s", o.GitFatFile)
 	}
 	return newCopyBackend(ctx, o, remote)
-}
-
-func (o Options) jobs(ctx context.Context, key string, def int) int {
-	if o.Jobs > 0 {
-		return o.Jobs
-	}
-	if v, ok := gitutil.ConfigGet(ctx, key, o.GitFatFile); ok {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return def
-}
-
-func defaultS3Jobs() int {
-	return min(16, 4*runtime.NumCPU())
 }
 
 func configBool(ctx context.Context, key, file string) bool {

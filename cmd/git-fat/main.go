@@ -144,6 +144,7 @@ type transferFlags struct {
 	profile *string
 	region  *string
 	jobs    *int
+	partMB  *int
 	accel   *bool
 	noAccel *bool
 }
@@ -158,6 +159,7 @@ func newFlags(name string) (*flag.FlagSet, *transferFlags) {
 		accel:   fs.Bool("accelerate", false, "use S3 transfer acceleration if the bucket has it enabled"),
 		noAccel: fs.Bool("no-accelerate", false, "do not use S3 transfer acceleration"),
 	}
+	tf.partMB = fs.Int("part-size", 0, "S3 multipart part size in MB")
 	fs.IntVar(tf.jobs, "jobs", 0, "parallel transfers")
 	fs.IntVar(tf.jobs, "j", 0, "parallel transfers (shorthand)")
 	return fs, tf
@@ -184,6 +186,7 @@ func (tf *transferFlags) backendOptions(repo *fat.Repo) backend.Options {
 		Profile:    *tf.profile,
 		Region:     *tf.region,
 		Jobs:       *tf.jobs,
+		PartSizeMB: *tf.partMB,
 		Accelerate: tf.accelerate(),
 		Logf:       repo.Verbose,
 	}
@@ -320,6 +323,11 @@ func cmdProfile(ctx context.Context, repo *fat.Repo, args []string) error {
 	fmt.Printf("region:  %s (%s)\n", orDefault(r.Value), r.Source)
 	a := backend.ResolveAccelerate("", lk)
 	fmt.Printf("accelerate: %s (%s)\n", a.Value, a.Source)
+	jobs, part := backend.TransferSettings(ctx, backend.Options{GitFatFile: repo.GitFatPath()})
+	fmt.Printf("jobs:       %s\n", jobs)
+	if backend.Kind(ctx, repo.GitFatPath()) == "s3" {
+		fmt.Printf("partsize:   %s MB\n", part)
+	}
 	return nil
 }
 

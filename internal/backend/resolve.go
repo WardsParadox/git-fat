@@ -35,6 +35,7 @@ func SystemLookup(ctx context.Context, gitFatFile string) Lookup {
 
 // Resolve applies the precedence: flag, GIT_FAT_* env, git config fat.*,
 // .gitfat s3.*, then the SDK default (reported as an empty value).
+// Numeric settings (jobs, partsize) are resolved in numeric.go the same way.
 func Resolve(name, flag, sdkEnv string, lk Lookup) Setting {
 	if flag != "" {
 		return Setting{flag, "--" + name + " flag"}

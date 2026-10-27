@@ -25,8 +25,9 @@ type s3Backend struct {
 	jobs      int
 	logf      func(string, ...any)
 
-	partSize int64         // bytes; 0 means the default
-	sem      chan struct{} // bounds in-flight part requests across all objects
+	partSize                 int64         // bytes; 0 means the default
+	jobsSetting, partSetting IntSetting    // for reporting
+	sem                      chan struct{} // bounds in-flight part requests across all objects
 }
 
 func newS3(ctx context.Context, o Options, bucket string) (*s3Backend, error) {
@@ -106,17 +107,21 @@ func newS3(ctx context.Context, o Options, bucket string) (*s3Backend, error) {
 		o.Logf("s3: transfer acceleration disabled: not requested")
 	}
 
+	jobs, partMB := TransferSettings(ctx, o)
+	o.Logf("s3: jobs=%s part size=%s MB", jobs, partMB)
 	return &s3Backend{
-		client:    client,
-		xfer:      xfer,
-		endpoint:  endpoint,
-		pathStyle: pathStyle,
-		bucket:    bucket,
-		prefix:    prefix,
-		objDir:    o.ObjDir,
-		jobs:      o.jobs(ctx, "s3.jobs", defaultS3Jobs()),
-		partSize:  s3PartSizeFromConfig(ctx, o),
-		logf:      o.Logf,
+		client:      client,
+		xfer:        xfer,
+		endpoint:    endpoint,
+		pathStyle:   pathStyle,
+		bucket:      bucket,
+		prefix:      prefix,
+		objDir:      o.ObjDir,
+		jobsSetting: jobs,
+		partSetting: partMB,
+		jobs:        jobs.Value,
+		partSize:    max(int64(partMB.Value)*mib, minPartSize),
+		logf:        o.Logf,
 	}, nil
 }
 
