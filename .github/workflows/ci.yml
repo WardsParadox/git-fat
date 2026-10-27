@@ -34,3 +34,9 @@ jobs:
           cp "$GITHUB_WORKSPACE"/test.sh "$GITHUB_WORKSPACE"/test-retroactive.sh .
           ./test.sh
           ./test-retroactive.sh
+      - name: Flag and subcommand tests
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          "$GITHUB_WORKSPACE"/test-flags.sh

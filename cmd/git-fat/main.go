@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/WardsParadox/git-fat/internal/backend"
@@ -26,7 +27,10 @@ func main() {
 	stop()
 	if err != nil {
 		var ee exitError
-		if errors.As(err, &ee) {
+		switch {
+		case errors.Is(err, errHelp):
+			return
+		case errors.As(err, &ee):
 			os.Exit(int(ee))
 		}
 		fmt.Fprintf(os.Stderr, "git-fat: %v\n", err)
@@ -38,104 +42,232 @@ type exitError int
 
 func (e exitError) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
+// errHelp is returned after --help has printed usage.
+var errHelp = flag.ErrHelp
+
+// usageError reports a command-line mistake and exits with status 2.
+func usageError(format string, args ...any) error {
+	fmt.Fprintf(os.Stderr, "git-fat: "+format+"\n", args...)
+	fmt.Fprintln(os.Stderr, usage)
+	return exitError(2)
+}
+
+// parseArgs parses flags that may be mixed with positional arguments. Anything
+// after a bare "--" is returned separately, untouched.
+func parseArgs(fs *flag.FlagSet, args []string) (pos, after []string, hasAfter bool, err error) {
+	for i, a := range args {
+		if a == "--" {
+			args, after, hasAfter = args[:i], args[i+1:], true
+			break
+		}
+	}
+	for {
+		if perr := fs.Parse(args); perr != nil {
+			if errors.Is(perr, flag.ErrHelp) {
+				return nil, nil, false, errHelp
+			}
+			return nil, nil, false, exitError(2) // flag already printed the problem
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos, after, hasAfter, nil
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
+}
+
+func newFlagSet(name string) *flag.FlagSet {
+	return flag.NewFlagSet("git fat "+name, flag.ContinueOnError)
+}
+
+// noArgs parses a command that takes no flags or arguments.
+func noArgs(name string, args []string) error {
+	pos, _, _, err := parseArgs(newFlagSet(name), args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usageError("git fat %s takes no arguments", name)
+	}
+	return nil
+}
+
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, usage)
-		return exitError(1)
+		return exitError(2)
 	}
 	cmd, args := args[0], args[1:]
 	if cmd == "version" || cmd == "--version" {
 		fmt.Println("git-fat", version)
 		return nil
 	}
+	if cmd == "-h" || cmd == "--help" || cmd == "help" {
+		fmt.Println(usage)
+		return nil
+	}
 
+	// Parse flags before touching the repository, so --help and mistakes work anywhere.
+	var run func(repo *fat.Repo) error
 	switch cmd {
-	case "init", "status", "push", "pull", "gc", "verify", "checkout", "find",
-		"index-filter", "filter-clean", "filter-smudge", "profile", "s3-info":
+	case "filter-clean", "filter-smudge":
+		if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+			fmt.Println("git fat " + cmd + ": git filter driver; reads stdin, writes stdout")
+			return nil
+		}
+		run = func(repo *fat.Repo) error {
+			if err := repo.Setup(); err != nil {
+				return err
+			}
+			if cmd == "filter-clean" {
+				return repo.Clean(os.Stdin, os.Stdout)
+			}
+			return repo.Smudge(os.Stdin, os.Stdout)
+		}
+	case "init", "checkout", "verify":
+		if err := noArgs(cmd, args); err != nil {
+			return err
+		}
+		run = func(repo *fat.Repo) error {
+			switch cmd {
+			case "init":
+				return repo.Init(ctx)
+			case "checkout":
+				return repo.Checkout(ctx, true)
+			}
+			if err := repo.Setup(); err != nil {
+				return err
+			}
+			if repo.Verify() != nil {
+				return exitError(1)
+			}
+			return nil
+		}
+	case "status":
+		fs, tf := newFlags("status")
+		pos, _, _, err := parseArgs(fs, args)
+		if err != nil {
+			return err
+		}
+		if len(pos) > 0 {
+			return usageError("git fat status takes no arguments")
+		}
+		run = func(repo *fat.Repo) error {
+			return noCommits(repo.Status(ctx, *tf.all), "report")
+		}
+	case "push":
+		fs, tf := newFlags("push")
+		pos, _, _, err := parseArgs(fs, args)
+		if err != nil {
+			return err
+		}
+		if len(pos) > 0 {
+			return usageError("git fat push takes no arguments")
+		}
+		run = func(repo *fat.Repo) error { return noCommits(cmdPush(ctx, repo, tf), "push") }
+	case "pull":
+		fs, tf := newFlags("pull")
+		pos, patterns, hasPatterns, err := parseArgs(fs, args)
+		if err != nil {
+			return err
+		}
+		if len(pos) > 1 {
+			return usageError("git fat pull takes at most one revision")
+		}
+		if !hasPatterns {
+			patterns = []string{""}
+		}
+		run = func(repo *fat.Repo) error { return noCommits(cmdPull(ctx, repo, tf, pos, patterns), "pull") }
+	case "gc":
+		fs := newFlagSet("gc")
+		dry := fs.Bool("dry-run", false, "list what would be removed without removing it")
+		fs.BoolVar(dry, "n", false, "shorthand for --dry-run")
+		headOnly := fs.Bool("head-only", false, "keep only objects referenced from HEAD")
+		pos, _, _, err := parseArgs(fs, args)
+		if err != nil {
+			return err
+		}
+		if len(pos) > 0 {
+			return usageError("git fat gc takes no arguments")
+		}
+		run = func(repo *fat.Repo) error {
+			if err := repo.Setup(); err != nil {
+				return err
+			}
+			return noCommits(repo.GC(ctx, fat.GCOptions{DryRun: *dry, HeadOnly: *headOnly}), "collect")
+		}
+	case "find":
+		pos, _, _, err := parseArgs(newFlagSet("find"), args)
+		if err != nil {
+			return err
+		}
+		if len(pos) != 1 {
+			return usageError("usage: git fat find <size-in-bytes>")
+		}
+		n, perr := strconv.ParseInt(pos[0], 10, 64)
+		if perr != nil {
+			return usageError("invalid size %q", pos[0])
+		}
+		run = func(repo *fat.Repo) error { return repo.Find(ctx, n) }
+	case "index-filter":
+		fs := newFlagSet("index-filter")
+		manage := fs.Bool("manage-gitattributes", false, "add enrolled files to .gitattributes")
+		pos, _, _, err := parseArgs(fs, args)
+		if err != nil {
+			return err
+		}
+		if len(pos) != 1 {
+			return usageError("usage: git fat index-filter <file-list> [--manage-gitattributes]")
+		}
+		run = func(repo *fat.Repo) error { return repo.IndexFilter(ctx, pos[0], *manage) }
+	case "profile":
+		fs := newProfileFlags()
+		pos, _, _, err := parseArgs(fs.fs, args)
+		if err != nil {
+			return err
+		}
+		if len(pos) > 0 && (pos[0] != "set" || len(pos) != 2) {
+			return usageError("usage: git fat profile [set <name>]")
+		}
+		run = func(repo *fat.Repo) error { return cmdProfile(ctx, repo, fs, pos) }
+	case "s3-info":
+		fs, tf := newFlags("s3-info")
+		pos, _, _, err := parseArgs(fs, args)
+		if err != nil {
+			return err
+		}
+		if len(pos) > 0 {
+			return usageError("git fat s3-info takes no arguments")
+		}
+		run = func(repo *fat.Repo) error {
+			lines, err := backend.S3Info(ctx, tf.backendOptions(repo))
+			if err != nil {
+				return err
+			}
+			for _, l := range lines {
+				fmt.Println(l)
+			}
+			return nil
+		}
 	default:
-		fmt.Fprintln(os.Stderr, usage)
-		return exitError(1)
+		return usageError("unknown command %q", cmd)
 	}
 
 	repo, err := fat.Open(ctx)
 	if err != nil {
 		return err
 	}
+	return run(repo)
+}
 
-	switch cmd {
-	case "filter-clean":
-		if err := repo.Setup(); err != nil {
-			return err
-		}
-		return repo.Clean(os.Stdin, os.Stdout)
-	case "filter-smudge":
-		if err := repo.Setup(); err != nil {
-			return err
-		}
-		return repo.Smudge(os.Stdin, os.Stdout)
-	case "init":
-		return repo.Init(ctx)
-	case "status":
-		fs, _ := newFlags("status")
-		all := fs.Bool("all", false, "include every referenced object")
-		if err := fs.Parse(args); err != nil {
-			return err
-		}
-		return repo.Status(ctx, *all)
-	case "push":
-		return cmdPush(ctx, repo, args)
-	case "pull":
-		return cmdPull(ctx, repo, args)
-	case "gc":
-		if err := repo.Setup(); err != nil {
-			return err
-		}
-		return repo.GC(ctx)
-	case "verify":
-		if err := repo.Setup(); err != nil {
-			return err
-		}
-		if err := repo.Verify(); err != nil {
-			return exitError(1)
-		}
-		return nil
-	case "checkout":
-		return repo.Checkout(ctx, true)
-	case "find":
-		if len(args) < 1 {
-			return errors.New("usage: git fat find <size-in-bytes>")
-		}
-		n, err := strconv.ParseInt(args[0], 10, 64)
-		if err != nil {
-			return fmt.Errorf("invalid size %q", args[0])
-		}
-		return repo.Find(ctx, n)
-	case "index-filter":
-		if len(args) < 1 {
-			return errors.New("usage: git fat index-filter <file-list> [--manage-gitattributes]")
-		}
-		manage := false
-		for _, a := range args[1:] {
-			manage = manage || a == "--manage-gitattributes"
-		}
-		return repo.IndexFilter(ctx, args[0], manage)
-	case "profile":
-		return cmdProfile(ctx, repo, args)
-	case "s3-info":
-		fs, tf := newFlags("s3-info")
-		if err := fs.Parse(args); err != nil {
-			return err
-		}
-		lines, err := backend.S3Info(ctx, tf.backendOptions(repo))
-		if err != nil {
-			return err
-		}
-		for _, l := range lines {
-			fmt.Println(l)
-		}
+// noCommits turns the "no HEAD yet" error into a friendly note.
+func noCommits(err error, verb string) error {
+	if errors.Is(err, fat.ErrNoCommits) {
+		fmt.Fprintf(os.Stderr, "git-fat: no commits yet, nothing to %s\n", verb)
 		return nil
 	}
-	return nil
+	return err
 }
 
 // transferFlags are shared by push, pull and status-like commands that talk to a remote.
@@ -150,7 +282,7 @@ type transferFlags struct {
 }
 
 func newFlags(name string) (*flag.FlagSet, *transferFlags) {
-	fs := flag.NewFlagSet("git fat "+name, flag.ContinueOnError)
+	fs := newFlagSet(name)
 	tf := &transferFlags{
 		all:     fs.Bool("all", false, "consider every ref, not just HEAD"),
 		profile: fs.String("profile", "", "AWS profile"),
@@ -175,6 +307,32 @@ func (tf *transferFlags) accelerate() string {
 	return ""
 }
 
+// noteIgnored logs transfer options that only apply to S3 when another backend is in use.
+func (tf *transferFlags) noteIgnored(ctx context.Context, repo *fat.Repo) {
+	if backend.Kind(ctx, repo.GitFatPath()) == "s3" {
+		return
+	}
+	var set []string
+	if *tf.profile != "" {
+		set = append(set, "--profile")
+	}
+	if *tf.region != "" {
+		set = append(set, "--region")
+	}
+	if *tf.partMB != 0 {
+		set = append(set, "--part-size")
+	}
+	if *tf.accel {
+		set = append(set, "--accelerate")
+	}
+	if *tf.noAccel {
+		set = append(set, "--no-accelerate")
+	}
+	if len(set) > 0 {
+		repo.Verbose("ignoring S3-only options for this remote: %s", strings.Join(set, " "))
+	}
+}
+
 func (tf *transferFlags) backend(ctx context.Context, repo *fat.Repo) (backend.Backend, error) {
 	return backend.New(ctx, tf.backendOptions(repo))
 }
@@ -192,11 +350,8 @@ func (tf *transferFlags) backendOptions(repo *fat.Repo) backend.Options {
 	}
 }
 
-func cmdPush(ctx context.Context, repo *fat.Repo, args []string) error {
-	fs, tf := newFlags("push")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+func cmdPush(ctx context.Context, repo *fat.Repo, tf *transferFlags) error {
+	tf.noteIgnored(ctx, repo)
 	if err := repo.Setup(); err != nil {
 		return err
 	}
@@ -224,22 +379,8 @@ func cmdPush(ctx context.Context, repo *fat.Repo, args []string) error {
 	return b.Push(ctx, names)
 }
 
-func cmdPull(ctx context.Context, repo *fat.Repo, args []string) error {
-	var patterns []string
-	hasPatterns := false
-	for i, a := range args {
-		if a == "--" {
-			patterns, args, hasPatterns = args[i+1:], args[:i], true
-			break
-		}
-	}
-	if !hasPatterns {
-		patterns = []string{""}
-	}
-	fs, tf := newFlags("pull")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+func cmdPull(ctx context.Context, repo *fat.Repo, tf *transferFlags, pos, patterns []string) error {
+	tf.noteIgnored(ctx, repo)
 	if err := repo.AssertInitDone(ctx); err != nil {
 		return err
 	}
@@ -248,9 +389,9 @@ func cmdPull(ctx context.Context, repo *fat.Repo, args []string) error {
 	}
 
 	rev := ""
-	if fs.NArg() > 0 {
+	if len(pos) > 0 {
 		var err error
-		if rev, err = gitutil.RevParse(ctx, fs.Arg(0)); err != nil {
+		if rev, err = gitutil.RevParse(ctx, pos[0]); err != nil {
 			return err
 		}
 	}
@@ -303,22 +444,28 @@ func cmdPull(ctx context.Context, repo *fat.Repo, args []string) error {
 	return repo.Checkout(ctx, false)
 }
 
-func cmdProfile(ctx context.Context, repo *fat.Repo, args []string) error {
-	if len(args) >= 1 && args[0] == "set" {
-		if len(args) != 2 {
-			return errors.New("usage: git fat profile set <name>")
-		}
-		return gitutil.ConfigSet(ctx, "fat.profile", args[1], "")
+type profileFlags struct {
+	fs      *flag.FlagSet
+	profile *string
+	region  *string
+}
+
+func newProfileFlags() *profileFlags {
+	fs := newFlagSet("profile")
+	return &profileFlags{
+		fs:      fs,
+		profile: fs.String("profile", "", "AWS profile"),
+		region:  fs.String("region", "", "AWS region"),
 	}
-	fs := flag.NewFlagSet("git fat profile", flag.ContinueOnError)
-	flagProfile := fs.String("profile", "", "AWS profile")
-	flagRegion := fs.String("region", "", "AWS region")
-	if err := fs.Parse(args); err != nil {
-		return err
+}
+
+func cmdProfile(ctx context.Context, repo *fat.Repo, pf *profileFlags, pos []string) error {
+	if len(pos) == 2 { // profile set <name>
+		return gitutil.ConfigSet(ctx, "fat.profile", pos[1], "")
 	}
 	lk := backend.SystemLookup(ctx, repo.GitFatPath())
-	p := backend.ResolveProfile(*flagProfile, lk)
-	r := backend.ResolveRegion(*flagRegion, lk)
+	p := backend.ResolveProfile(*pf.profile, lk)
+	r := backend.ResolveRegion(*pf.region, lk)
 	fmt.Printf("profile: %s (%s)\n", orDefault(p.Value), p.Source)
 	fmt.Printf("region:  %s (%s)\n", orDefault(r.Value), r.Source)
 	a := backend.ResolveAccelerate("", lk)

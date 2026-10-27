@@ -85,7 +85,7 @@ func warnf(format string, args ...any) {
 func S3Info(ctx context.Context, o Options) ([]string, error) {
 	bucket, ok := gitutil.ConfigGet(ctx, "s3.bucket", o.GitFatFile)
 	if !ok || bucket == "" {
-		return nil, fmt.Errorf("no s3.bucket in %s", o.GitFatFile)
+		return nil, fmt.Errorf("this repository does not use S3 (no s3.bucket in %s)", o.GitFatFile)
 	}
 	b, err := newS3(ctx, o, bucket)
 	if err != nil {
