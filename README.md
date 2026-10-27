@@ -146,6 +146,17 @@ than 9000 parts. These keys are read from `.gitfat` only: `s3.bucket`,
 `s3.endpoint`, `s3.pathstyle`, `s3.prefix`, `rsync.remote`, `rsync.sshuser`,
 `rsync.sshport`.
 
+## Differences from the Python version
+* One static Go binary; no Python, rsync or AWS CLI.
+* SSH remotes use SFTP, S3 uses the AWS SDK, and both transfer in parallel.
+* `git fat gc` keeps every object referenced from any ref (and the index), not just `HEAD`,
+  so objects used only by other branches or tags are no longer deleted. Use
+  `git fat gc --dry-run` (or `-n`) to preview what would be removed, and
+  `git fat gc --head-only` for the old behaviour.
+* Flags may follow positional arguments (`git fat pull <rev> --all -j 4`), and an
+  unknown flag or subcommand exits with status 2 and a usage message.
+* In a repository with no commits, `status`, `push` and `pull` print a short note instead of failing.
+
 # A worked example
 
 Before we start, let's turn on verbose reporting so we can see what's

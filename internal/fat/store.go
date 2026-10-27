@@ -74,13 +74,25 @@ func (r *Repo) Verify() error {
 	return fmt.Errorf("%d corrupted objects", len(corrupted))
 }
 
-// GC removes objects that no reachable commit references.
-func (r *Repo) GC(ctx context.Context) error {
+// GCOptions control which objects GC keeps and whether it deletes.
+type GCOptions struct {
+	DryRun   bool // list what would be removed, remove nothing
+	HeadOnly bool // keep only objects referenced from HEAD
+}
+
+// GC removes objects that nothing references. By default every ref and the
+// index count as references; HeadOnly restores the narrower HEAD-only rule.
+func (r *Repo) GC(ctx context.Context, o GCOptions) error {
 	cat, err := r.Catalog()
 	if err != nil {
 		return err
 	}
-	refs, err := r.Referenced(ctx, "", false)
+	var refs map[string]struct{}
+	if o.HeadOnly {
+		refs, err = r.Referenced(ctx, "", false)
+	} else {
+		refs, err = r.referenced(ctx, "--all", "--indexed-objects")
+	}
 	if err != nil {
 		return err
 	}
@@ -91,7 +103,11 @@ func (r *Repo) GC(ctx context.Context) error {
 		}
 	}
 	sort.Strings(garbage)
-	fmt.Printf("Unreferenced objects to remove: %d\n", len(garbage))
+	if o.DryRun {
+		fmt.Printf("Unreferenced objects that would be removed: %d\n", len(garbage))
+	} else {
+		fmt.Printf("Unreferenced objects to remove: %d\n", len(garbage))
+	}
 	for _, name := range garbage {
 		path := filepath.Join(r.ObjDir, name)
 		fi, err := os.Stat(path)
@@ -99,6 +115,9 @@ func (r *Repo) GC(ctx context.Context) error {
 			return err
 		}
 		fmt.Printf("%10d %s\n", fi.Size(), name)
+		if o.DryRun {
+			continue
+		}
 		if err := removeObject(path); err != nil {
 			return err
 		}

@@ -3,6 +3,7 @@ package fat
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -19,19 +20,25 @@ import (
 func (r *Repo) Referenced(ctx context.Context, rev string, all bool) (map[string]struct{}, error) {
 	switch {
 	case all:
-		rev = "--all"
+		return r.referenced(ctx, "--all")
 	case rev == "":
-		var err error
-		if rev, err = gitutil.RevParse(ctx, "HEAD"); err != nil {
-			return nil, err
+		if err := gitutil.Run(ctx, "rev-parse", "--verify", "-q", "HEAD"); err != nil {
+			return nil, ErrNoCommits
 		}
+		return r.referenced(ctx, "HEAD")
 	}
+	return r.referenced(ctx, rev)
+}
 
+// ErrNoCommits is returned when HEAD does not exist yet.
+var ErrNoCommits = errors.New("this repository has no commits yet")
+
+func (r *Repo) referenced(ctx context.Context, revArgs ...string) (map[string]struct{}, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	g := newGroup(cancel)
 
-	revList := gitutil.Command(ctx, "rev-list", "--objects", rev)
+	revList := gitutil.Command(ctx, append([]string{"rev-list", "--objects"}, revArgs...)...)
 	revOut, err := revList.StdoutPipe()
 	if err != nil {
 		return nil, err
