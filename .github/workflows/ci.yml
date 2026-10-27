@@ -2,12 +2,13 @@ name: ci
 
 on:
   push:
-    branches: [main, go-rewrite]
+    branches: [master, main]
   pull_request:
 
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -20,6 +21,9 @@ jobs:
       - run: go test ./...
       - name: Build
         run: go build -o bin/git-fat ./cmd/git-fat
+      - name: Install word list
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q wamerican
       - name: Shell tests
         run: |
           export PATH="$PWD/bin:$PATH"
