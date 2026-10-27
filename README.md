@@ -10,14 +10,20 @@ Some people recommend checking binaries into different repositories or even not 
 * selective control of which large files to pull into the local store
 * local fat object stores can be shared between multiple clones, even by different users
 * can easily support fat object stores distributed across multiple hosts
-* depends only on stock Python and rsync
+* a single static binary; the only runtime dependency is `git`
+* parallel uploads and downloads to S3 (or any S3-compatible store) and over SSH/SFTP
 
 ## Related projects
 * [git-annex](http://git-annex.branchable.com) is a far more comprehensive solution, but with less transparent workflow and with more dependencies.
 * [git-media](https://github.com/schacon/git-media) adopts a similar approach to `git-fat`, but with a different synchronization philosophy and with many Ruby dependencies.
 
 # Installation and configuration
-Place `git-fat` in your `PATH`.
+Download the archive for your platform from the
+[releases page](https://github.com/WardsParadox/git-fat/releases), extract
+`git-fat` and place it in your `PATH`. Binaries are published for Linux,
+macOS, Windows and FreeBSD. No Python, rsync or AWS CLI is needed; only `git`.
+
+To build from source, run `go build -o git-fat ./cmd/git-fat`.
 
 Edit (or create) `.gitattributes` to regard any desired extensions as fat files.
 
@@ -32,29 +38,113 @@ Run `git fat init` to activate the extension. Now add and commit as usual.
 Matched files will be transparently stored externally, but will appear
 complete in the working tree.
 
-Set a remote store for the fat objects by editing `.gitfat`.
+Set a remote store for the fat objects by editing `.gitfat`. This file should
+typically be committed to the repository so that others will automatically have
+their remote set. `git fat version` prints the installed version.
 
-    [rsync]
-    remote = your.remote-host.org:/share/fat-store
-
-This file should typically be committed to the repository so that others
-will automatically have their remote set. This remote address can use
-any protocol supported by rsync.
-
-Most users will configure it to use remote ssh in a directory with shared
-access. To do this, set the `sshuser` and `sshport` variables in `.gitfat`
-configuration file. For example, to use rsync with ssh, with the default
-port (22) and authenticate with the user "_fat_", your configuration would
-look like this:
+## SSH / SFTP remote
+git-fat speaks SFTP itself, so no `rsync` or `ssh` binary is needed.
 
     [rsync]
     remote = your.remote-host.org:/share/fat-store
     sshuser = fat
+    sshport = 2222
 
-To use an Amazon S3 bucket as the backend, you should first install the AWS CLI and configure it with a user that has access to the bucket. Your configuration would then look like:
+* `remote` is `[user@]host:/path`. A remote without a host (`/mnt/nfs/fat-store`)
+  is treated as a local directory, and so is a `localhost:` remote.
+* `sshuser` and `sshport` are optional and take precedence over `~/.ssh/config`,
+  which is also read for `HostName`, `User`, `Port` and `IdentityFile`.
+* Authentication uses `ssh-agent` (`SSH_AUTH_SOCK`) and then `~/.ssh/id_ed25519`,
+  `id_rsa` and `id_ecdsa`. Passphrase-protected keys must be loaded into the agent.
+* The server must already be in `~/.ssh/known_hosts` (or the file named by `UserKnownHostsFile`);
+  connect once with `ssh` to add it.
+* `ProxyJump` (a comma-separated chain of `[user@]host[:port]`) and `ProxyCommand`
+  (with `%h`, `%p`, `%r`, `%%`) from `~/.ssh/config` are supported. Each hop is
+  authenticated and host-key checked like the final host. `none` disables either;
+  if both are set, `ProxyJump` wins.
+* Each SSH connection carries at most 8 SFTP sessions, so a large `jobs` value
+  opens extra connections, through the same proxy.
+* `jobs` (see the configuration reference) sets the number of parallel SFTP sessions.
+* If some objects are missing on the remote, `git fat pull` still downloads and restores the rest, then lists the missing ones and exits non-zero.
+* Objects that already exist on the remote are never overwritten. Uploads go to
+  `<name>.tmp` and are renamed when complete.
+* `rsync.options` is ignored and `rsync://` daemon remotes are not supported.
+
+## Amazon S3 / S3-compatible remote
 
     [s3]
     bucket = s3://your-s3-bucket
+
+Credentials come from the standard AWS chain (environment, shared config, SSO,
+instance roles). Optional keys under `[s3]` are `profile`, `region`, `endpoint`
+(MinIO, Cloudflare R2), `pathstyle` (`true` for path-style addressing), `prefix`
+(key prefix inside the bucket), `jobs`, `partsize` and `accelerate`; see the
+configuration reference below.
+
+Objects are listed once, then uploaded and downloaded with multipart transfers.
+A shared budget of about 4 part requests per job (at least 16) is split across
+the objects in flight, so a single large file uses all of it while many small
+files are transferred side by side. Downloads are hashed as they arrive and
+verified against their SHA-1 before being stored.
+
+### Choosing an AWS profile
+`git fat profile` shows each resolved setting and where it came from, and
+`git fat profile set <name>` writes `fat.profile` to `.git/config`:
+
+    $ git fat profile
+    profile: work (git config fat.profile)
+    region:  us-west-2 (.gitfat s3.region)
+    accelerate: false (default)
+    jobs:       16 (default)
+    partsize:   8 (default) MB
+
+The AWS profile additionally falls back to `AWS_PROFILE` and the SDK default chain.
+
+### Transfer Acceleration
+[S3 Transfer Acceleration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html)
+routes uploads and downloads through CloudFront edge locations, which can be
+much faster over long distances. It is off by default and is used only when the
+bucket has it enabled. AWS charges an extra per-GB fee for accelerated transfers,
+so turn it on deliberately.
+
+Enable it on the bucket first (the bucket name must not contain dots):
+
+    aws s3api put-bucket-accelerate-configuration \
+        --bucket your-s3-bucket --accelerate-configuration Status=Enabled
+
+Then request it with `--accelerate`, `GIT_FAT_ACCELERATE=true`,
+`git config fat.accelerate true` or `accelerate = true` under `[s3]`. Values
+follow git booleans (`true`, `yes`, `on`, `1` and their opposites).
+
+When requested, git-fat checks the bucket's acceleration status once per run
+(this needs `s3:GetAccelerateConfiguration`). If the status is not `Enabled`, the
+check fails, `s3.endpoint` or `s3.pathstyle` is set, or the bucket name contains
+a dot, it prints one warning and continues on the standard endpoint; it never
+fails a push or pull because of acceleration. Listing always uses the standard
+endpoint. `git fat s3-info` shows the resolved setting and the bucket's status,
+and `GIT_FAT_VERBOSE=1` logs whether acceleration is in use.
+
+## Configuration reference
+Every setting resolves in the same order, highest first: the command-line flag,
+the `GIT_FAT_*` environment variable, `git config fat.*` (per user, not
+committed), then the key in `.gitfat` (shared repository default). Keys placed
+in `.git/config` under their `.gitfat` names (for example `s3.jobs`) also work.
+A value that is invalid (for example a non-numeric `jobs`) prints one warning
+and is skipped in favour of the next source. `git fat profile` and
+`git fat s3-info` show what each setting resolved to and why.
+
+| Setting | Flag | Environment | `git config` | `.gitfat` | Default |
+| --- | --- | --- | --- | --- | --- |
+| AWS profile | `--profile` | `GIT_FAT_PROFILE` | `fat.profile` | `s3.profile` | `AWS_PROFILE`, then SDK chain |
+| AWS region | `--region` | `GIT_FAT_REGION` | `fat.region` | `s3.region` | SDK default or bucket region |
+| Transfer acceleration | `--accelerate`, `--no-accelerate` | `GIT_FAT_ACCELERATE` | `fat.accelerate` | `s3.accelerate` | off |
+| Parallel transfers | `-j`, `--jobs` | `GIT_FAT_JOBS` | `fat.jobs` | `s3.jobs` or `rsync.jobs` | S3: `min(16, 4*CPUs)`; SSH and local: 8 |
+| Multipart part size (MB) | `--part-size` | `GIT_FAT_PART_MB` (`GIT_FAT_S3_PART_MB` is a deprecated alias) | `fat.partsize` | `s3.partsize` | 8 (minimum 5) |
+
+The part size is raised automatically for objects that would otherwise need more
+than 9000 parts. These keys are read from `.gitfat` only: `s3.bucket`,
+`s3.endpoint`, `s3.pathstyle`, `s3.prefix`, `rsync.remote`, `rsync.sshuser`,
+`rsync.sshport`.
 
 # A worked example
 
@@ -109,7 +199,7 @@ The patch itself is very simple and does not include the binary.
     +#$# git-fat 1f218834a137f7b185b498924e7a030008aee2ae
 
 ## Pushing fat files
-Now let's push our fat files using the rsync configuration that we set up earlier.
+Now let's push our fat files to the remote that we set up earlier.
 
     $ git fat push
     Pushing to localhost:/tmp/fat-store

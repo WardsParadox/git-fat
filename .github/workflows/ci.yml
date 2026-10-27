@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Build
+        run: go build -o bin/git-fat ./cmd/git-fat
+      - name: Install word list
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q wamerican
+      - name: Shell tests
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          git config --global init.defaultBranch master
+          mkdir -p "$RUNNER_TEMP/shell" && cd "$RUNNER_TEMP/shell"
+          cp "$GITHUB_WORKSPACE"/test.sh "$GITHUB_WORKSPACE"/test-retroactive.sh .
+          ./test.sh
+          ./test-retroactive.sh
