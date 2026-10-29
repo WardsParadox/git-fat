@@ -352,3 +352,9 @@ will be available in all repositories without extra copies. You still need to
 * Gracefully handle unmanaged files when the filter is called (either
   legacy files or files matching the pattern that should some reason not
   be treated as fat).
+
+## License
+Apache License 2.0. See [LICENSE](LICENSE). Parts of this project derive from
+the original Python git-fat by Jed Brown, which is under the 2-clause BSD
+license. Those terms are kept in [LICENSE.BSD](LICENSE.BSD) and the attribution
+is recorded in [NOTICE](NOTICE).

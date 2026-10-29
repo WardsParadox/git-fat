@@ -35,6 +35,8 @@ archives:
         formats: [zip]
     files:
       - LICENSE
+      - LICENSE.BSD
+      - NOTICE
       - README.md
 
 checksum:

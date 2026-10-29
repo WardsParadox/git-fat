@@ -1,0 +1,9 @@
+git-fat
+Copyright 2026 git-fat contributors
+
+This product includes software developed by Jed Brown and the contributors to
+the original Python implementation of git-fat.
+
+Portions of this project derive from git-fat, Copyright (c) 2012 Jed Brown,
+licensed under the 2-clause BSD license. Those terms are kept in LICENSE.BSD
+and continue to apply to that material.
