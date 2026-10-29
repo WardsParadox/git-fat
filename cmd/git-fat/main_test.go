@@ -14,11 +14,14 @@ var allCommands = []string{"init", "status", "push", "pull", "gc", "verify", "ch
 func TestEveryCommandBuildsItsFlagSet(t *testing.T) {
 	for _, name := range []string{"status", "push", "pull", "s3-info"} {
 		fs, tf := newFlags(name)
-		if _, _, _, err := parseArgs(fs, []string{"--all", "-j", "2", "--part-size", "6", "--no-accelerate"}); err != nil {
+		if _, _, _, err := parseArgs(fs, []string{"--all", "-j", "2", "--part-size", "6", "--no-accelerate", "--no-progress"}); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
-		if !*tf.all || *tf.jobs != 2 || *tf.partMB != 6 || !*tf.noAccel {
+		if !*tf.all || *tf.jobs != 2 || *tf.partMB != 6 || !*tf.noAccel || !*tf.noProg {
 			t.Errorf("%s: flags not applied", name)
+		}
+		if got := tf.progress(); got != "false" {
+			t.Errorf("%s: progress() = %q, want \"false\"", name, got)
 		}
 	}
 	newProfileFlags()

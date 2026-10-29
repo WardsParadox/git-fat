@@ -120,7 +120,7 @@ func (b *s3Backend) Push(ctx context.Context, names []string) error {
 	// Largest first keeps the tail of the run from being one big object.
 	sort.SliceStable(todo, func(i, j int) bool { return todo[i].size > todo[j].size })
 
-	prog := progress.New("push", len(todo), total)
+	prog := progress.New("push", len(todo), total, b.progress)
 	defer prog.Close()
 	remaining := atomic.Int64{}
 	remaining.Store(int64(len(todo)))
@@ -249,7 +249,7 @@ func (b *s3Backend) Pull(ctx context.Context, names []string) error {
 	}
 	sort.SliceStable(todo, func(i, j int) bool { return todo[i].size > todo[j].size })
 
-	prog := progress.New("pull", len(todo), total)
+	prog := progress.New("pull", len(todo), total, b.progress)
 	defer prog.Close()
 	remaining := atomic.Int64{}
 	remaining.Store(int64(len(todo)))

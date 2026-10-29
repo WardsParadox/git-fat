@@ -279,6 +279,8 @@ type transferFlags struct {
 	partMB  *int
 	accel   *bool
 	noAccel *bool
+	prog    *bool
+	noProg  *bool
 }
 
 func newFlags(name string) (*flag.FlagSet, *transferFlags) {
@@ -290,11 +292,25 @@ func newFlags(name string) (*flag.FlagSet, *transferFlags) {
 		jobs:    new(int),
 		accel:   fs.Bool("accelerate", false, "use S3 transfer acceleration if the bucket has it enabled"),
 		noAccel: fs.Bool("no-accelerate", false, "do not use S3 transfer acceleration"),
+		prog:    fs.Bool("progress", false, "draw a transfer progress bar (default when stderr is a terminal)"),
+		noProg:  fs.Bool("no-progress", false, "do not report transfer progress"),
 	}
 	tf.partMB = fs.Int("part-size", 0, "S3 multipart part size in MB")
 	fs.IntVar(tf.jobs, "jobs", 0, "parallel transfers")
 	fs.IntVar(tf.jobs, "j", 0, "parallel transfers (shorthand)")
 	return fs, tf
+}
+
+// progress reports the --progress/--no-progress choice as a git boolean, or ""
+// when neither flag was given.
+func (tf *transferFlags) progress() string {
+	switch {
+	case *tf.noProg:
+		return "false"
+	case *tf.prog:
+		return "true"
+	}
+	return ""
 }
 
 func (tf *transferFlags) accelerate() string {
@@ -346,6 +362,7 @@ func (tf *transferFlags) backendOptions(repo *fat.Repo) backend.Options {
 		Jobs:       *tf.jobs,
 		PartSizeMB: *tf.partMB,
 		Accelerate: tf.accelerate(),
+		Progress:   tf.progress(),
 		Logf:       repo.Verbose,
 	}
 }
@@ -470,6 +487,8 @@ func cmdProfile(ctx context.Context, repo *fat.Repo, pf *profileFlags, pos []str
 	fmt.Printf("region:  %s (%s)\n", orDefault(r.Value), r.Source)
 	a := backend.ResolveAccelerate("", lk)
 	fmt.Printf("accelerate: %s (%s)\n", a.Value, a.Source)
+	pr := backend.ResolveProgress("", backend.Kind(ctx, repo.GitFatPath()), lk, repo.Verbose)
+	fmt.Printf("progress:   %s (%s)\n", pr.Value, pr.Source)
 	jobs, part := backend.TransferSettings(ctx, backend.Options{GitFatFile: repo.GitFatPath()})
 	fmt.Printf("jobs:       %s\n", jobs)
 	if backend.Kind(ctx, repo.GitFatPath()) == "s3" {

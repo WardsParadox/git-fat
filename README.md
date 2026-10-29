@@ -138,8 +138,14 @@ and is skipped in favour of the next source. `git fat profile` and
 | AWS profile | `--profile` | `GIT_FAT_PROFILE` | `fat.profile` | `s3.profile` | `AWS_PROFILE`, then SDK chain |
 | AWS region | `--region` | `GIT_FAT_REGION` | `fat.region` | `s3.region` | SDK default or bucket region |
 | Transfer acceleration | `--accelerate`, `--no-accelerate` | `GIT_FAT_ACCELERATE` | `fat.accelerate` | `s3.accelerate` | off |
+| Transfer progress | `--progress`, `--no-progress` | `GIT_FAT_PROGRESS` | `fat.progress` | `s3.progress` or `rsync.progress` (or `core.progress`) | on |
 | Parallel transfers | `-j`, `--jobs` | `GIT_FAT_JOBS` | `fat.jobs` | `s3.jobs` or `rsync.jobs` | S3: `min(16, 4*CPUs)`; SSH and local: 8 |
 | Multipart part size (MB) | `--part-size` | `GIT_FAT_PART_MB` (`GIT_FAT_S3_PART_MB` is a deprecated alias) | `fat.partsize` | `s3.partsize` | 8 (minimum 5) |
+
+Progress is reported as a bar on stderr while a push or pull runs, and as a
+one-line summary when it finishes. The bar is drawn only when stderr is a
+terminal, so logs and pipes stay clean; `--no-progress` (or `TERM=dumb`) turns
+off the bar and the summary as well.
 
 The part size is raised automatically for objects that would otherwise need more
 than 9000 parts. These keys are read from `.gitfat` only: `s3.bucket`,

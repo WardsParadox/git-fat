@@ -12,6 +12,7 @@ require (
 	github.com/pkg/sftp v1.13.9
 	golang.org/x/crypto v0.38.0
 	golang.org/x/sync v0.14.0
+	golang.org/x/term v0.32.0
 )
 
 require (

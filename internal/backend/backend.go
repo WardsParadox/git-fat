@@ -24,6 +24,7 @@ type Options struct {
 	Profile    string // --profile
 	Region     string // --region
 	Accelerate string // --accelerate / --no-accelerate: "true", "false" or ""
+	Progress   string // --progress / --no-progress: "true", "false" or ""
 	Jobs       int    // -j/--jobs; 0 means unset
 	PartSizeMB int    // --part-size; 0 means unset
 	Logf       func(format string, args ...any)

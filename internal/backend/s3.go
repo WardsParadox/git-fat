@@ -23,6 +23,7 @@ type s3Backend struct {
 	prefix    string
 	objDir    string
 	jobs      int
+	progress  bool
 	logf      func(string, ...any)
 
 	partSize                 int64         // bytes; 0 means the default
@@ -120,6 +121,7 @@ func newS3(ctx context.Context, o Options, bucket string) (*s3Backend, error) {
 		jobsSetting: jobs,
 		partSetting: partMB,
 		jobs:        jobs.Value,
+		progress:    progressEnabled(ctx, o, "s3"),
 		partSize:    max(int64(partMB.Value)*mib, minPartSize),
 		logf:        o.Logf,
 	}, nil

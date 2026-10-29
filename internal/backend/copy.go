@@ -40,12 +40,13 @@ type fsPool interface {
 // copyBackend implements Push and Pull for any remoteFS: it skips objects that
 // already exist, uploads via a temporary name, and verifies downloads.
 type copyBackend struct {
-	pool   fsPool
-	root   string
-	join   func(elem ...string) string
-	objDir string
-	jobs   int
-	logf   func(string, ...any)
+	pool     fsPool
+	root     string
+	join     func(elem ...string) string
+	objDir   string
+	jobs     int
+	progress bool
+	logf     func(string, ...any)
 }
 
 const defaultCopyJobs = 8
@@ -61,13 +62,14 @@ func newCopyBackend(ctx context.Context, o Options, remote string) (Backend, err
 	jobSetting := ResolveJobs(o.Jobs, "rsync", SystemLookup(ctx, o.GitFatFile), warnf)
 	o.Logf("jobs: %s", jobSetting)
 	jobs := jobSetting.Value
+	prog := progressEnabled(ctx, o, "rsync")
 
 	userHost, dir, remoteHost := splitRemote(remote)
 	if !remoteHost {
 		o.Logf("Using local store %s", remote)
 		return &copyBackend{
 			pool: localPool{}, root: remote, join: filepath.Join,
-			objDir: o.ObjDir, jobs: jobs, logf: o.Logf,
+			objDir: o.ObjDir, jobs: jobs, progress: prog, logf: o.Logf,
 		}, nil
 	}
 
@@ -79,7 +81,7 @@ func newCopyBackend(ctx context.Context, o Options, remote string) (Backend, err
 		o.Logf("Treating %s as a local path", host)
 		return &copyBackend{
 			pool: localPool{}, root: dir, join: filepath.Join,
-			objDir: o.ObjDir, jobs: jobs, logf: o.Logf,
+			objDir: o.ObjDir, jobs: jobs, progress: prog, logf: o.Logf,
 		}, nil
 	}
 	port, _ := gitutil.ConfigGet(ctx, "rsync.sshport", o.GitFatFile)
@@ -92,7 +94,8 @@ func newCopyBackend(ctx context.Context, o Options, remote string) (Backend, err
 		return nil, err
 	}
 	o.Logf("Using sftp://%s%s", userHost, dir)
-	return &copyBackend{pool: pool, root: dir, join: path.Join, objDir: o.ObjDir, jobs: jobs, logf: o.Logf}, nil
+	return &copyBackend{pool: pool, root: dir, join: path.Join, objDir: o.ObjDir,
+		jobs: jobs, progress: prog, logf: o.Logf}, nil
 }
 
 // splitRemote parses "[user@]host:path". A remote without a host, or a Windows
@@ -137,7 +140,7 @@ func (b *copyBackend) Push(ctx context.Context, names []string) error {
 	if len(items) == 0 {
 		return nil
 	}
-	prog := progress.New("push", len(items), total)
+	prog := progress.New("push", len(items), total, b.progress)
 	defer prog.Close()
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -213,7 +216,7 @@ func (b *copyBackend) Pull(ctx context.Context, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
-	prog := progress.New("pull", len(names), 0)
+	prog := progress.New("pull", len(names), 0, b.progress)
 	defer prog.Close()
 	var mu sync.Mutex
 	var missing []string

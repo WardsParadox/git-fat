@@ -94,6 +94,7 @@ func S3Info(ctx context.Context, o Options) ([]string, error) {
 	lk := SystemLookup(ctx, o.GitFatFile)
 	p, r := ResolveProfile(o.Profile, lk), ResolveRegion(o.Region, lk)
 	req := ResolveAccelerate(o.Accelerate, lk)
+	pg := ResolveProgress(o.Progress, "s3", lk, warnf)
 	status, err := bucketAccelerateStatus(ctx, b.client, b.bucket)
 	switch {
 	case err != nil:
@@ -107,6 +108,7 @@ func S3Info(ctx context.Context, o Options) ([]string, error) {
 		fmt.Sprintf("profile:    %s (%s)", orDefault(p.Value), p.Source),
 		fmt.Sprintf("region:     %s (%s)", orDefault(r.Value), r.Source),
 		fmt.Sprintf("accelerate: %s (%s)", req.Value, req.Source),
+		fmt.Sprintf("progress:   %s (%s)", pg.Value, pg.Source),
 		fmt.Sprintf("jobs:       %s", jobs),
 		fmt.Sprintf("partsize:   %s MB (minimum 5)", part),
 		fmt.Sprintf("bucket acceleration status: %s", status),
